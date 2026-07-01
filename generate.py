@@ -417,9 +417,17 @@ def apply_priority(siren, stories, candidates):
 # Render (Drudge aesthetic: single column, <font> tags, no CSS, no JS)
 # ---------------------------------------------------------------------------
 
-def link(text, url):
-    return (f'<a href="{html.escape(url, quote=True)}" '
-            f'target="_blank" rel="noopener">{html.escape(text)}</a>')
+LINK_COLOR = "#0018a8"    # dark, high-contrast blue for headline links
+SIREN_COLOR = "#cc0000"   # red siren
+TEXT_COLOR = "#111111"    # near-black body text
+META_COLOR = "#555555"    # source names (darker than before, still secondary)
+
+
+def link(text, url, color=LINK_COLOR):
+    # Inline color with !important so an embedding site's theme can't gray it out.
+    return (f'<a href="{html.escape(url, quote=True)}" target="_blank" rel="noopener" '
+            f'style="color:{color} !important;text-decoration:underline;">'
+            f'{html.escape(text)}</a>')
 
 
 def _masthead(stamp):
@@ -440,12 +448,12 @@ def _siren_block(siren):
     return [
         '<font face="Arial, Helvetica, sans-serif" size="5" color="#cc0000"><b>',
         "&#128680;&#128680;&#128680; "
-        + link(siren["headline"].upper(), siren["link"])
+        + link(siren["headline"].upper(), siren["link"], SIREN_COLOR)
         + " &#128680;&#128680;&#128680;",
         "</b></font>",
         "<br>",
-        f'<font face="Arial, Helvetica, sans-serif" size="1" color="#666666">'
-        f'{html.escape(siren["source"])}</font>',
+        f'<font face="Arial, Helvetica, sans-serif" size="1">'
+        f'<span style="color:{META_COLOR};">{html.escape(siren["source"])}</span></font>',
         '<hr width="60%">',
     ]
 
@@ -463,7 +471,8 @@ def _story_table(stories):
            '<font face="Times New Roman, Times, serif" size="4">']
     for s in stories:
         out.append(link(s["title"], s["link"])
-                   + f' <font size="1" color="#666666">({html.escape(s["source"])})</font>')
+                   + f' <font size="1"><span style="color:{META_COLOR};">'
+                   f'({html.escape(s["source"])})</span></font>')
         out.append("<br><br>")
     out += ["</font>", "</td></tr></table>"]
     return out
@@ -472,16 +481,21 @@ def _story_table(stories):
 def _footer():
     return [
         '<hr width="60%">',
-        '<font face="Arial, Helvetica, sans-serif" size="1" color="#999999">'
+        '<font face="Arial, Helvetica, sans-serif" size="1" color="#777777">'
         "Automated headline aggregation. Links open at their original publishers.</font>",
         "<br><br>",
     ]
 
 
+# Wrap everything so text without its own color stays dark inside a host page's theme.
+WRAP_OPEN = f'<div style="color:{TEXT_COLOR};">'
+WRAP_CLOSE = "</div>"
+
+
 def _content(siren, stories, stamp):
     """Flat single-column layout."""
-    lines = ["<center>"] + _masthead(stamp) + _siren_block(siren) + _story_table(stories)
-    lines += _footer() + ["</center>"]
+    lines = [WRAP_OPEN, "<center>"] + _masthead(stamp) + _siren_block(siren) + _story_table(stories)
+    lines += _footer() + ["</center>", WRAP_CLOSE]
     return "\n".join(lines)
 
 
@@ -489,12 +503,12 @@ def _content_sections(siren, stories, stamp):
     """US / Global sectioned layout."""
     us = [s for s in stories if s.get("region", "US") == "US"]
     intl = [s for s in stories if s.get("region", "US") != "US"]
-    lines = ["<center>"] + _masthead(stamp) + _siren_block(siren)
+    lines = [WRAP_OPEN, "<center>"] + _masthead(stamp) + _siren_block(siren)
     if us:
         lines += _heading("UNITED STATES") + _story_table(us)
     if intl:
         lines += _heading("GLOBAL") + _story_table(intl)
-    lines += _footer() + ["</center>"]
+    lines += _footer() + ["</center>", WRAP_CLOSE]
     return "\n".join(lines)
 
 
