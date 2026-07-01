@@ -1,0 +1,23 @@
+<!--
+  Paste this into a Squarespace CODE BLOCK on the page shown at jewhatredtoday.com.
+  Replace GHUSER and REPO below with your GitHub username and repository name.
+  It pulls the latest news into your page every time someone visits (and refreshes
+  every 10 minutes), so it always looks native to your site — no iframe, no redirect.
+-->
+<div id="jht-news" style="text-align:center;font-family:Arial,Helvetica,sans-serif;color:#888;">Loading the latest headlines…</div>
+<script>
+(function () {
+  var URL = "https://GHUSER.github.io/REPO/embed_sections.html"; // <-- edit this
+  function load() {
+    fetch(URL + "?t=" + Date.now())
+      .then(function (r) { return r.text(); })
+      .then(function (html) { document.getElementById("jht-news").innerHTML = html; })
+      .catch(function () {
+        document.getElementById("jht-news").innerHTML =
+          "Headlines are updating — please check back in a moment.";
+      });
+  }
+  load();
+  setInterval(load, 600000); // re-pull every 10 minutes
+})();
+</script>
