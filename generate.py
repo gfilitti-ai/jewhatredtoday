@@ -12,11 +12,13 @@ Pipeline:
 No API key present? Falls back to a keyword-only ranker so the page still builds.
 """
 
+import calendar
 import html
 import json
 import os
 import re
 import sys
+import time
 import urllib.parse
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -29,8 +31,13 @@ import feedparser
 
 OUTPUT_PATH = os.environ.get("OUTPUT_PATH", "public/index.html")
 MODEL = "claude-opus-4-8"
-RECENCY = "when:3d"          # Google News recency operator
+RECENCY = "when:3d"          # Google News recency operator (soft — leaks older items)
 MAX_CANDIDATES = 150         # cap sent to the model, to bound token cost
+
+# Hard age ceiling enforced in code (Google's when: filter is unreliable, and the
+# direct feeds have none). Anything older than this is dropped outright.
+MAX_AGE_DAYS = 7
+PRIORITY_MAX_AGE_DAYS = 14   # priority (Filitti) coverage may be a little older
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
@@ -240,6 +247,7 @@ def gather():
     sources += [(news_url(q, RECENCY), False) for q in QUERIES]
     sources += [(f, False) for f in DIRECT_FEEDS]
 
+    now = time.time()
     for url, is_priority in sources:
         feed = _fetch(url)
         for e in feed.entries:
@@ -250,6 +258,11 @@ def gather():
             if not source:
                 src = getattr(e, "source", None)
                 source = getattr(src, "title", "") if src else ""
+            # Hard recency gate — drop anything older than the age ceiling.
+            pub = getattr(e, "published_parsed", None)
+            max_age = PRIORITY_MAX_AGE_DAYS if is_priority else MAX_AGE_DAYS
+            if pub is not None and (now - calendar.timegm(pub)) > max_age * 86400:
+                continue
             key = _norm(title)
             if not key or key in seen_titles or link in seen_links:
                 continue
@@ -259,7 +272,7 @@ def gather():
                 "title": title,
                 "source": source or "News",
                 "link": link,
-                "published": getattr(e, "published_parsed", None),
+                "published": pub,
                 "priority": is_priority,
             })
 
@@ -494,7 +507,14 @@ def _wrap_full(content):
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         "</head>",
         '<body bgcolor="#ffffff" text="#000000" link="#0000cc" vlink="#551a8b">',
-        content, "</body>", "</html>",
+        content,
+        # Lets an embedding page auto-size its iframe to this content. Harmless when
+        # the page is viewed directly (it just posts to a parent that isn't listening).
+        '<script>(function(){function h(){try{parent.postMessage('
+        '{jht:1,h:document.documentElement.scrollHeight},"*");}catch(e){}}'
+        'window.addEventListener("load",h);window.addEventListener("resize",h);'
+        'setInterval(h,1500);})();</script>',
+        "</body>", "</html>",
     ])
 
 
