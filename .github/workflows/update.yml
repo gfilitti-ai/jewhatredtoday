@@ -1,6 +1,8 @@
 name: Update Jew-hatred Today
 
 on:
+  push:
+    branches: [main]          # auto-rebuild whenever you push new code
   schedule:
     - cron: "0 */4 * * *"   # every 4 hours (UTC)
   workflow_dispatch: {}       # allow manual runs from the Actions tab
