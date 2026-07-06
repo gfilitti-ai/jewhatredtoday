@@ -32,7 +32,7 @@ import feedparser
 OUTPUT_PATH = os.environ.get("OUTPUT_PATH", "public/index.html")
 MODEL = "claude-opus-4-8"
 RECENCY = "when:7d"          # Google News recency operator (soft — leaks older items)
-MAX_CANDIDATES = 220         # cap sent to the model, to bound token cost
+MAX_CANDIDATES = 280         # cap sent to the model, to bound token cost
 
 # Hard age ceiling enforced in code (Google's when: filter is unreliable, and the
 # direct feeds have none). Anything older than this is dropped outright.
@@ -93,13 +93,40 @@ QUERIES = [
     "antisemitism Australia",
     "antisemitism Argentina OR Brazil OR Mexico",
     "antisemitism Netherlands OR Belgium OR Italy OR Spain",
+    "Secure Community Network Jewish",   # SCN has no feed — catch news about its alerts
 ]
 
 # A few direct beat feeds (aggregate a lot of diaspora-incident coverage).
+# Dedicated Jewish-news outlets. These carry lots of non-incident content (community
+# news, Torah, obituaries), so items from these feeds are passed through a relevance
+# filter (RELEVANCE_KW) before they become candidates.
 DIRECT_FEEDS = [
-    "https://www.jta.org/feed",
-    "https://www.algemeiner.com/feed/",
-    "https://www.jns.org/feed/",
+    "https://www.jta.org/feed",                  # Jewish Telegraphic Agency
+    "https://www.jns.org/feed/",                 # Jewish News Syndicate
+    "https://www.algemeiner.com/feed/",          # The Algemeiner
+    "https://www.vosizneias.com/feed/",          # VIN News (Vos Iz Neias)
+    "https://www.theyeshivaworld.com/feed",      # Yeshiva World News
+    "https://www.timesofisrael.com/feed/",       # Times of Israel
+    "https://jewishinsider.com/feed/",           # Jewish Insider
+    "https://forward.com/feed/",                 # The Forward
+    "https://collive.com/feed/",                 # COLlive
+    "https://www.jewishbreakingnews.com/feed/",  # JBN (Jewish Breaking News)
+    "https://jewishlink.news/feed/",             # The Jewish Link
+    "https://www.adl.org/rss.xml",               # ADL (closest feed to its incident tracker)
+]
+
+# An item from a broad DIRECT_FEED is kept only if its headline matches one of these
+# (Google News QUERIES are already topical, so they skip this filter). Tune freely.
+RELEVANCE_KW = [
+    "antisemit", "anti-semit", "jew-hat", "jew hat", "swastika", "holocaust",
+    "nazi", "hate crime", "hate-crime", "hate speech", "bigotry",
+    "synagogue", "shul", "jcc", "yeshiva", "chabad", "kosher", "menorah", "mezuzah",
+    "vandal", "desecrat", "graffiti", "deface", "defaced", "firebomb", "arson",
+    "molotov", "assault", "attacked", "attack on", "stabb", "beaten", "punch",
+    "harass", "slur", "threat", "bomb threat", "plot", "terror", "extremis",
+    "jewish cemetery", "jewish school", "jewish student", "jewish man",
+    "jewish woman", "jewish family", "jewish community", "jewish center",
+    "jewish institution", "jewish home", "rabbi",
 ]
 
 SYSTEM = """\
@@ -255,6 +282,12 @@ def guess_region(candidate):
     return "Global" if _GLOBAL_RE.search(text) else "US"
 
 
+def _relevant(title):
+    """Keep broad-outlet feed items only if the headline is on the antisemitism beat."""
+    t = title.lower()
+    return any(k in t for k in RELEVANCE_KW)
+
+
 def gather():
     seen_titles, seen_links = set(), set()
     candidates = []
@@ -264,14 +297,16 @@ def gather():
                 + urllib.parse.quote(q + " " + recency)
                 + "&hl=en-US&gl=US&ceid=US:en")
 
-    # (url, is_priority). Priority feeds first so their flag wins on de-dupe.
-    sources = [(news_url('"' + q + '"', PRIORITY_RECENCY), True) for q in PRIORITY_QUERIES]
-    sources += [(news_url(q, RECENCY), False) for q in QUERIES]
-    sources += [(f, False) for f in DIRECT_FEEDS]
+    # (url, is_priority, broad). Priority feeds first so their flag wins on de-dupe.
+    # broad=True marks general Jewish-outlet feeds whose items need the relevance filter.
+    sources = [(news_url('"' + q + '"', PRIORITY_RECENCY), True, False) for q in PRIORITY_QUERIES]
+    sources += [(news_url(q, RECENCY), False, False) for q in QUERIES]
+    sources += [(f, False, True) for f in DIRECT_FEEDS]
 
     now = time.time()
-    for url, is_priority in sources:
+    for url, is_priority, broad in sources:
         feed = _fetch(url)
+        feed_title = (feed.feed.get("title") or "").strip() if broad else ""
         for e in feed.entries:
             link = getattr(e, "link", "").strip()
             title, source = _clean_title(getattr(e, "title", ""))
@@ -280,6 +315,11 @@ def gather():
             if not source:
                 src = getattr(e, "source", None)
                 source = getattr(src, "title", "") if src else ""
+            if not source and broad:
+                source = feed_title           # RSS titles lack the "- Publisher" suffix
+            # Broad outlet feeds carry off-topic content — keep only on-beat headlines.
+            if broad and not _relevant(title):
+                continue
             # Hard recency gate. A dated item must fall inside the window. An UNDATED
             # item is dropped unless it's priority (Filitti) coverage — undated feed
             # items were how months-old stragglers slipped in.
