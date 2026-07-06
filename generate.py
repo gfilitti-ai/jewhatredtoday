@@ -31,13 +31,13 @@ import feedparser
 
 OUTPUT_PATH = os.environ.get("OUTPUT_PATH", "public/index.html")
 MODEL = "claude-opus-4-8"
-RECENCY = "when:7d"          # Google News recency operator (soft — leaks older items)
+RECENCY = "when:5d"          # Google News recency operator (soft — leaks older items)
 MAX_CANDIDATES = 280         # cap sent to the model, to bound token cost
 
 # Hard age ceiling enforced in code (Google's when: filter is unreliable, and the
 # direct feeds have none). Anything older than this is dropped outright.
-MAX_AGE_DAYS = 7
-PRIORITY_MAX_AGE_DAYS = 14   # priority (Filitti) coverage may be a little older
+MAX_AGE_DAYS = 5
+PRIORITY_MAX_AGE_DAYS = 10   # priority (Filitti) coverage may be a little older
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
@@ -320,15 +320,15 @@ def gather():
             # Broad outlet feeds carry off-topic content — keep only on-beat headlines.
             if broad and not _relevant(title):
                 continue
-            # Hard recency gate. A dated item must fall inside the window. An UNDATED
-            # item is dropped unless it's priority (Filitti) coverage — undated feed
-            # items were how months-old stragglers slipped in.
+            # Hard recency gate. Every item must carry a machine-readable publish date
+            # inside the window. Items with NO parseable date — the ones Google News
+            # shows as a relative age like "3w" or "2mo" — are dropped outright,
+            # priority included, since we can't verify how old they actually are.
             pub = getattr(e, "published_parsed", None)
+            if pub is None:
+                continue
             max_age = PRIORITY_MAX_AGE_DAYS if is_priority else MAX_AGE_DAYS
-            if pub is not None:
-                if (now - calendar.timegm(pub)) > max_age * 86400:
-                    continue
-            elif not is_priority:
+            if (now - calendar.timegm(pub)) > max_age * 86400:
                 continue
             key = _norm(title)
             if not key or key in seen_titles or link in seen_links:
