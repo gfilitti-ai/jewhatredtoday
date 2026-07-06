@@ -31,8 +31,8 @@ import feedparser
 
 OUTPUT_PATH = os.environ.get("OUTPUT_PATH", "public/index.html")
 MODEL = "claude-opus-4-8"
-RECENCY = "when:3d"          # Google News recency operator (soft — leaks older items)
-MAX_CANDIDATES = 150         # cap sent to the model, to bound token cost
+RECENCY = "when:7d"          # Google News recency operator (soft — leaks older items)
+MAX_CANDIDATES = 220         # cap sent to the model, to bound token cost
 
 # Hard age ceiling enforced in code (Google's when: filter is unreliable, and the
 # direct feeds have none). Anything older than this is dropped outright.
@@ -56,32 +56,50 @@ PRIORITY_RECENCY = "when:14d"
 
 # Topical Google News searches. Broad on purpose — Claude does the fine filtering.
 QUERIES = [
+    # Incident types
     "antisemitic incident",
     "antisemitic attack",
     "antisemitic vandalism",
     "antisemitic graffiti",
     "antisemitic assault",
     "antisemitic harassment",
-    "synagogue vandalized",
-    "synagogue attack",
-    "Jewish cemetery vandalized",
-    "swastika vandalism",
-    "hate crime Jewish",
-    "attack on Jewish man OR woman OR student",
-    "Jewish students harassed campus",
-    "antisemitism arrest OR charged OR sentenced",
-    "plot against synagogue OR Jewish",
-    "Holocaust denial OR distortion",
     "antisemitic threats",
+    "antisemitic flyers OR leaflets",
+    "antisemitic chants OR slurs",
+    "synagogue vandalized",
+    "synagogue attack OR firebomb",
+    "Jewish cemetery vandalized OR desecrated",
+    "Jewish school threat OR vandalism",
+    "kosher store OR restaurant attacked OR vandalized",
+    "swastika vandalism",
+    "menorah vandalized",
+    "hate crime Jewish",
+    "Jewish man OR woman OR student attacked",
+    "rabbi assaulted OR attacked",
+    "Jewish students harassed campus",
+    "Jewish museum attack OR shooting",
+    "antisemitism arrest OR charged OR sentenced OR convicted",
+    "plot against synagogue OR Jewish",
+    "Holocaust denial OR distortion OR mockery",
     "ADL antisemitic incidents",
-    "antisemitism Europe",
-    "antisemitism UK OR France OR Germany OR Australia OR Canada",
+    "CST antisemitic incidents",
+    # Places (diaspora, outside Israel)
+    "antisemitism United States",
+    "antisemitism campus university",
+    "antisemitism UK OR Britain",
+    "antisemitism France OR Paris",
+    "antisemitism Germany",
+    "antisemitism Canada OR Toronto OR Montreal",
+    "antisemitism Australia",
+    "antisemitism Argentina OR Brazil OR Mexico",
+    "antisemitism Netherlands OR Belgium OR Italy OR Spain",
 ]
 
 # A few direct beat feeds (aggregate a lot of diaspora-incident coverage).
 DIRECT_FEEDS = [
     "https://www.jta.org/feed",
     "https://www.algemeiner.com/feed/",
+    "https://www.jns.org/feed/",
 ]
 
 SYSTEM = """\
@@ -140,6 +158,10 @@ that refer to the provided candidate list.
 For EVERY selected story (and the siren), assign a region:
 - "US"     — the incident occurred in the United States.
 - "Global" — the incident occurred anywhere else in the diaspora (still outside Israel).
+
+RECENCY: Each candidate shows its age (e.g., "2d ago" or "undated"). Strongly prefer \
+recent incidents and rank fresher stories higher. Do not select stale items, and avoid \
+"undated" items unless the headline itself makes clear the story is significant and current.
 """
 
 SCHEMA = {
@@ -258,10 +280,15 @@ def gather():
             if not source:
                 src = getattr(e, "source", None)
                 source = getattr(src, "title", "") if src else ""
-            # Hard recency gate — drop anything older than the age ceiling.
+            # Hard recency gate. A dated item must fall inside the window. An UNDATED
+            # item is dropped unless it's priority (Filitti) coverage — undated feed
+            # items were how months-old stragglers slipped in.
             pub = getattr(e, "published_parsed", None)
             max_age = PRIORITY_MAX_AGE_DAYS if is_priority else MAX_AGE_DAYS
-            if pub is not None and (now - calendar.timegm(pub)) > max_age * 86400:
+            if pub is not None:
+                if (now - calendar.timegm(pub)) > max_age * 86400:
+                    continue
+            elif not is_priority:
                 continue
             key = _norm(title)
             if not key or key in seen_titles or link in seen_links:
@@ -292,8 +319,17 @@ def curate_llm(candidates):
     import anthropic
 
     client = anthropic.Anthropic()
+    now = time.time()
+    def age_str(c):
+        p = c.get("published")
+        if not p:
+            return "undated"
+        days = (now - calendar.timegm(p)) / 86400
+        return "today" if days < 1 else f"{days:.0f}d ago"
+
     listing = "\n".join(
-        f"[{i}] {'[FILITTI] ' if c.get('priority') else ''}{c['title']} ({c['source']})"
+        f"[{i}] {'[FILITTI] ' if c.get('priority') else ''}{c['title']} "
+        f"({c['source']}, {age_str(c)})"
         for i, c in enumerate(candidates)
     )
     user = (
