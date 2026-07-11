@@ -31,11 +31,15 @@ import feedparser
 
 OUTPUT_PATH = os.environ.get("OUTPUT_PATH", "public/index.html")
 MODEL = "claude-opus-4-8"
-RECENCY = "when:5d"          # Google News recency operator (soft — leaks older items)
+# Discovery uses Bing News RSS. Unlike Google News — which re-dates resurfaced articles
+# so months-old stories look recent — Bing reports each article's TRUE publish date, so
+# the hard age gate below actually catches old items. BING_FRESHNESS limits Bing to a
+# recent window; MAX_AGE_DAYS is the real recency cap.
+BING_FRESHNESS = "7"         # Bing qft "interval" value (~last week)
 MAX_CANDIDATES = 280         # cap sent to the model, to bound token cost
 
-# Hard age ceiling enforced in code (Google's when: filter is unreliable, and the
-# direct feeds have none). Anything older than this is dropped outright.
+# Hard age ceiling enforced in code, on each article's true publish date. Anything
+# older than this is dropped outright.
 MAX_AGE_DAYS = 5
 PRIORITY_MAX_AGE_DAYS = 10   # priority (Filitti) coverage may be a little older
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -52,7 +56,6 @@ PRIORITY_AS_SIREN = True     # promote the top priority story into the SIREN slo
 # Cleveland Jewish News / JNS Paul Kessler stories where Filitti is a quoted source.
 # Wider window than the main beat so his coverage is not missed.
 PRIORITY_QUERIES = ["Gerard Filitti"]
-PRIORITY_RECENCY = "when:14d"
 
 # Topical Google News searches. Broad on purpose — Claude does the fine filtering.
 QUERIES = [
@@ -186,9 +189,20 @@ For EVERY selected story (and the siren), assign a region:
 - "US"     — the incident occurred in the United States.
 - "Global" — the incident occurred anywhere else in the diaspora (still outside Israel).
 
-RECENCY: Each candidate shows its age (e.g., "2d ago" or "undated"). Strongly prefer \
-recent incidents and rank fresher stories higher. Do not select stale items, and avoid \
-"undated" items unless the headline itself makes clear the story is significant and current.
+RECENCY: Each candidate shows its age (e.g., "2d ago"). Strongly prefer recent incidents \
+and rank fresher stories higher.
+
+CURRENCY: This tracker is for NEW incidents and NEW developments, not fresh coverage of \
+already-known events. The key test is the date of the EVENT, not the date of the article. \
+EXCLUDE an item — even when its listed age looks recent — if it merely reports, recaps, \
+revisits, or analyzes an incident that already happened more than about a week ago. \
+Examples to exclude: a new write-up of the March 2026 West Bloomfield / Temple Israel \
+(Michigan) synagogue attack or any earlier mass-casualty attack; anniversary or "on this \
+day" pieces; "year in review" / "over the past year" summaries; re-reports of old polls, \
+studies, or surveys; and stories about a past World Cup or old election. \
+IN SCOPE, by contrast, is a genuinely NEW development in an older case reported now — an \
+arrest, charge, indictment, plea, verdict, or sentencing. When unsure whether the \
+underlying event is recent, leave it out. Favor specific, newly reported incidents.
 """
 
 SCHEMA = {
@@ -292,15 +306,15 @@ def gather():
     seen_titles, seen_links = set(), set()
     candidates = []
 
-    def news_url(q, recency):
-        return ("https://news.google.com/rss/search?q="
-                + urllib.parse.quote(q + " " + recency)
-                + "&hl=en-US&gl=US&ceid=US:en")
+    def bing_url(q):
+        return ("https://www.bing.com/news/search?q="
+                + urllib.parse.quote(q)
+                + "&qft=interval%3d%22" + BING_FRESHNESS + "%22&format=rss&setmkt=en-US")
 
     # (url, is_priority, broad). Priority feeds first so their flag wins on de-dupe.
     # broad=True marks general Jewish-outlet feeds whose items need the relevance filter.
-    sources = [(news_url('"' + q + '"', PRIORITY_RECENCY), True, False) for q in PRIORITY_QUERIES]
-    sources += [(news_url(q, RECENCY), False, False) for q in QUERIES]
+    sources = [(bing_url('"' + q + '"'), True, False) for q in PRIORITY_QUERIES]
+    sources += [(bing_url(q), False, False) for q in QUERIES]
     sources += [(f, False, True) for f in DIRECT_FEEDS]
 
     now = time.time()
@@ -313,6 +327,8 @@ def gather():
             if not link or not title:
                 continue
             if not source:
+                source = (getattr(e, "news_source", "") or "").strip()   # Bing publisher
+            if not source:
                 src = getattr(e, "source", None)
                 source = getattr(src, "title", "") if src else ""
             if not source and broad:
@@ -320,10 +336,9 @@ def gather():
             # Broad outlet feeds carry off-topic content — keep only on-beat headlines.
             if broad and not _relevant(title):
                 continue
-            # Hard recency gate. Every item must carry a machine-readable publish date
-            # inside the window. Items with NO parseable date — the ones Google News
-            # shows as a relative age like "3w" or "2mo" — are dropped outright,
-            # priority included, since we can't verify how old they actually are.
+            # Hard recency gate on the article's TRUE publish date (Bing reports it
+            # accurately). Items with no parseable date are dropped, priority included,
+            # since we can't verify how old they actually are.
             pub = getattr(e, "published_parsed", None)
             if pub is None:
                 continue
