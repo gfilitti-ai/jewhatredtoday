@@ -607,6 +607,9 @@ def _wrap_full(content):
     return "\n".join([
         "<html>", "<head>", '<meta charset="utf-8">',
         "<title>JEW-HATRED TODAY</title>",
+        # Machine-readable build time (Unix epoch). The deploy workflow's freshness
+        # guard reads this to decide whether an hourly probe should trigger a rebuild.
+        f"<!-- build_epoch={int(time.time())} -->",
         # Classic Drudge auto-refresh (plain HTML, no JS): reload every 10 minutes.
         '<meta http-equiv="refresh" content="600">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
@@ -624,7 +627,8 @@ def _wrap_full(content):
 
 
 def _wrap_embed(content, stamp):
-    return f"<!-- Jew-hatred Today - generated {stamp} -->\n" + content
+    return (f"<!-- Jew-hatred Today - generated {stamp} -->\n"
+            f"<!-- build_epoch={int(time.time())} -->\n" + content)
 
 
 def render_full(siren, stories, stamp):

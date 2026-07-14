@@ -2,9 +2,14 @@ name: Update Jew-hatred Today
 
 on:
   push:
-    branches: [main]          # auto-rebuild whenever you push new code
+    branches: [main]          # rebuild whenever you push new code
   schedule:
-    - cron: "0 */4 * * *"   # every 4 hours (UTC)
+    # Hourly PROBE at an off-peak minute (:43). Top-of-hour crons ("0 * * *") sit in
+    # GitHub's most congested queue and get silently skipped under load. A probe only
+    # triggers a real (Claude-calling) rebuild when the live page is stale -- see the
+    # freshness guard in the "check" job -- so content still refreshes about every 4h at
+    # flat API cost, while a skipped 4-hour slot is caught within ~1 hour, not 4-8.
+    - cron: "43 * * * *"
   workflow_dispatch: {}       # allow manual runs from the Actions tab
 
 # Least-privilege token; Pages deploy needs pages + id-token.
@@ -13,13 +18,49 @@ permissions:
   pages: write
   id-token: write
 
-# Never run two publishes at once.
+# Serialize Pages work; do NOT cancel an in-progress build (a new probe must never
+# kill a real rebuild that is mid-flight).
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
+  # Decide whether a rebuild is actually needed. On push / manual runs, always rebuild.
+  # On the hourly schedule, rebuild only when the live page is older than the threshold.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      stale: ${{ steps.guard.outputs.stale }}
+    steps:
+      - id: guard
+        env:
+          MAX_AGE_SECONDS: "13800"   # 3h50m: a ~4h-old page rebuilds; a fresher one is skipped
+          LIVE_URL: "https://gfilitti-ai.github.io/jewhatredtoday/index.html"
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "Event '${{ github.event_name }}': forcing a rebuild."
+            echo "stale=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          html="$(curl -s --max-time 20 "$LIVE_URL")"
+          epoch="$(printf '%s' "$html" | grep -oE 'build_epoch=[0-9]+' | head -1 | cut -d= -f2)"
+          if [ -z "$epoch" ]; then
+            echo "No build_epoch on the live page; rebuilding to be safe."
+            echo "stale=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          now="$(date +%s)"
+          age=$(( now - epoch ))
+          echo "Live page age: ${age}s (threshold ${MAX_AGE_SECONDS}s)."
+          if [ "$age" -ge "$MAX_AGE_SECONDS" ]; then
+            echo "Stale -> rebuild."
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Fresh -> skip (no Claude call, no deploy)."
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: check
+    if: needs.check.outputs.stale == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,7 +77,8 @@ jobs:
           path: public
 
   deploy:
-    needs: build
+    needs: [check, build]
+    if: needs.check.outputs.stale == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
