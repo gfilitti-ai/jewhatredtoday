@@ -34,6 +34,11 @@ Heading, source line, headline-hero card, X copy, then the **article URL** for t
 ## Schedule
 - Runs automatically at **10:00 AM and 3:00 PM ET daily** (scheduled task `social-post-drafts`).
 
+## On-demand: single URL -> post
+- When Gerard drops in an article URL, build a post from just that article (no feed needed): read the article (use the Chrome connection for paywalled sites like NYT, where his logged-in session sees the full text), verify the facts, then produce the X post + Instagram caption + hashtags + a headline-hero card, with the article URL as the reply.
+- **Default action: stage as an X thread draft** (same as the batches) - never publish unless Gerard says "publish this one" for that specific post.
+- Save the card (and any packet) into `~/Downloads/Claude-Social Media/` with a timestamped filename.
+
 ## X staging (unattended)
 - After building the packet, each selected story is staged as an X **thread draft**: main post = commentary + hashtags + headline-hero card; second post (reply) = the article URL. Saved as a draft, **never published**.
 - If Chrome is closed, not logged into X, or the composer can't be reached, staging stops without posting, the packet is still saved, and Gerard is notified which stories are pending so he can reconnect and re-run the task.
